@@ -9,6 +9,11 @@ CORS(app)
 # Configurazione della chiave API di OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+# Cartella uploads/ in cui salvare le immagini delle notizie caricate
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
 # Funzione generica per chiamare le API di ChatGPT
 def chatgpt_request(messages, model="gpt-3.5-turbo"):
     try:
@@ -67,31 +72,41 @@ def generate_labels():
     labels = [label.strip() for label in result.split(",") if label.strip()]
     return jsonify({"labels": labels})
 
-#Nuovo endpoint per salvare le notizie
+# Endpoint per salvare le notizie
 @app.route('/publish_news', methods=['POST'])
 def publish_news():
-    data = request.json
-    title = data.get("title", "")
-    content = data.get("content", "")
-    keywords = data.get("keywords", "")
+    title = request.form.get("title", "")
+    content = request.form.get("content", "")
+    keywords = request.form.get("keywords", "")
 
     if not title or not content:
         return jsonify({"error": "Titolo e contenuto sono obbligatori."}), 400
 
+    # Gestione dell'immagine
+    image_url = None
+    if "image" in request.files:
+        image = request.files["image"]
+        if image.filename != "":
+            image_path = os.path.join(app.config["UPLOAD_FOLDER"], image.filename)
+            image.save(image_path)
+            image_url = f"/{image_path}"  # Percorso dell'immagine
+
+    # Salvataggio della notizia con immagine
     news_storage.append({
         "title": title,
         "content": content,
-        "keywords": keywords
+        "keywords": keywords,
+        "image_url": image_url
     })
-    
-    return jsonify({"message": "Notizia salvata con successo!"}), 201
 
-#Nuovo endpoint per ottenere le notizie salvate
+    return jsonify({"message": "Notizia salvata con successo!", "image_url": image_url}), 201
+
+# Endpoint per ottenere le notizie salvate
 @app.route('/news', methods=['GET'])
 def get_news():
     return jsonify({"news": news_storage})
 
-#Endpoint di test
+# Endpoint di test
 @app.route('/', methods=['GET'])
 def health_check():
     return jsonify({"message":"Backend operativo!"})
