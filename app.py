@@ -14,7 +14,10 @@ UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-# Funzione generica per chiamare le API di ChatGPT
+# Simulazione di un database in memoria
+news_storage = []
+
+# Funzione generica per chiamare le API di OpenAI (ChatGPT)
 def chatgpt_request(messages, model="gpt-3.5-turbo"):
     try:
         response = openai.ChatCompletion.create(
@@ -25,12 +28,12 @@ def chatgpt_request(messages, model="gpt-3.5-turbo"):
         return response['choices'][0]['message']['content'].strip()
     except Exception as e:
         return str(e)
-    
-#Endpoint per sintetizzare le notizie 
+
+# Endpoint per sintetizzare le notizie 
 @app.route('/synthesize', methods=['POST'])
 def synthesize():
     data = request.json
-    text = data.get("text", "")
+    text = data.get("text", "").strip()
     if not text:
         return jsonify({"error": "Il testo è obbligatorio."}), 400
 
@@ -41,11 +44,11 @@ def synthesize():
     result = chatgpt_request(messages)
     return jsonify({"summary": result})
 
-#Endpoint per correggere le notizie
+# Endpoint per correggere le notizie
 @app.route('/check_grammar', methods=['POST'])
 def check_grammar():
     data = request.get_json()
-    text = data.get('text', "")
+    text = data.get("text", "").strip()
     if not text:
         return jsonify({"error": "Il testo è obbligatorio."}), 400
 
@@ -56,16 +59,16 @@ def check_grammar():
     result = chatgpt_request(messages)
     return jsonify({"corrected_text": result})
 
-#Endpoint per generare parole chiave
+# Endpoint per generare parole chiave
 @app.route('/generate_labels', methods=['POST'])
 def generate_labels():
     data = request.json
-    text = data.get("text", "")
+    text = data.get("text", "").strip()
     if not text:
         return jsonify({"error": "Il testo è obbligatorio."}), 400
 
     messages = [
-        {"role": "system", "content": "Genera un massimo di 10 parole chiave per classificare il seguente testo."},
+        {"role": "system", "content": "Genera un massimo di 10 parole chiave per classificare il seguente testo, separate da virgole."},
         {"role": "user", "content": text}
     ]
     result = chatgpt_request(messages)
@@ -75,9 +78,9 @@ def generate_labels():
 # Endpoint per salvare le notizie
 @app.route('/publish_news', methods=['POST'])
 def publish_news():
-    title = request.form.get("title", "")
-    content = request.form.get("content", "")
-    keywords = request.form.get("keywords", "")
+    title = request.form.get("title", "").strip()
+    content = request.form.get("content", "").strip()
+    keywords = request.form.get("keywords", "").strip()
 
     if not title or not content:
         return jsonify({"error": "Titolo e contenuto sono obbligatori."}), 400
@@ -86,20 +89,21 @@ def publish_news():
     image_url = None
     if "image" in request.files:
         image = request.files["image"]
-        if image.filename != "":
+        if image.filename:
             image_path = os.path.join(app.config["UPLOAD_FOLDER"], image.filename)
             image.save(image_path)
             image_url = f"/{image_path}"  # Percorso dell'immagine
 
-    # Salvataggio della notizia con immagine
-    news_storage.append({
+    # Salvataggio della notizia in memoria
+    news_item = {
         "title": title,
         "content": content,
-        "keywords": keywords,
+        "keywords": keywords.split(",") if keywords else [],
         "image_url": image_url
-    })
+    }
+    news_storage.append(news_item)
 
-    return jsonify({"message": "Notizia salvata con successo!", "image_url": image_url}), 201
+    return jsonify({"message": "Notizia salvata con successo!", "news": news_item}), 201
 
 # Endpoint per ottenere le notizie salvate
 @app.route('/news', methods=['GET'])
@@ -109,7 +113,7 @@ def get_news():
 # Endpoint di test
 @app.route('/', methods=['GET'])
 def health_check():
-    return jsonify({"message":"Backend operativo!"})
+    return jsonify({"message": "Backend operativo!"})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host="0.0.0.0", port=5000)
