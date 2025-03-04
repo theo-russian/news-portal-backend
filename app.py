@@ -2,6 +2,8 @@ import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import openai
+from google.cloud import storage
+import uuid
 
 app = Flask(__name__)
 CORS(app)
@@ -9,12 +11,12 @@ CORS(app)
 # Configurazione della chiave API di OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Cartella uploads/ in cui salvare le immagini delle notizie caricate
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+# Configura Google Cloud Storage
+GCS_BUCKET_NAME = "crafty-tractor-450216-t8-news-images"
+storage_client = storage.Client()
+bucket = storage_client.bucket(GCS_BUCKET_NAME)
 
-# Simulazione di un database in memoria
+# Simulazione di un database in memoria (ogni notizia ha un ID univoco)
 news_storage = []
 
 # Funzione generica per chiamare le API di OpenAI (ChatGPT)
@@ -28,6 +30,22 @@ def chatgpt_request(messages, model="gpt-3.5-turbo"):
         return response['choices'][0]['message']['content'].strip()
     except Exception as e:
         return str(e)
+
+# Funzione per caricare immagini su Google Cloud Storage
+def upload_image_to_gcs(image):
+    blob_name = f"news_images/{uuid.uuid4()}_{image.filename}"
+    blob = bucket.blob(blob_name)
+    blob.upload_from_file(image, content_type=image.content_type)
+    blob.make_public()
+    return blob.public_url
+
+# Funzione per eliminare un'immagine da Google Cloud Storage
+def delete_image_from_gcs(image_url):
+    if not image_url:
+        return
+    blob_name = image_url.split(f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/")[-1]
+    blob = bucket.blob(blob_name)
+    blob.delete()
 
 # Endpoint per sintetizzare le notizie 
 @app.route('/synthesize', methods=['POST'])
@@ -90,12 +108,11 @@ def publish_news():
     if "image" in request.files:
         image = request.files["image"]
         if image.filename:
-            image_path = os.path.join(app.config["UPLOAD_FOLDER"], image.filename)
-            image.save(image_path)
-            image_url = f"/{image_path}"  # Percorso dell'immagine
+            image_url = upload_image_to_gcs(image)
 
-    # Salvataggio della notizia in memoria
+    # Salvataggio della notizia con un ID univoco
     news_item = {
+        "id": str(uuid.uuid4()),  # Genera un ID univoco per ogni notizia
         "title": title,
         "content": content,
         "keywords": keywords.split(",") if keywords else [],
@@ -109,6 +126,23 @@ def publish_news():
 @app.route('/news', methods=['GET'])
 def get_news():
     return jsonify({"news": news_storage})
+
+# Endpoint per eliminare una notizia
+@app.route('/delete_news/<news_id>', methods=['DELETE'])
+def delete_news(news_id):
+    global news_storage
+    news_item = next((news for news in news_storage if news["id"] == news_id), None)
+
+    if not news_item:
+        return jsonify({"error": "Notizia non trovata."}), 404
+
+    # Eliminare l'immagine dallo storage se esiste
+    delete_image_from_gcs(news_item["image_url"])
+
+    # Rimuovere la notizia dall'array
+    news_storage = [news for news in news_storage if news["id"] != news_id]
+
+    return jsonify({"message": "Notizia eliminata con successo!"}), 200
 
 # Endpoint di test
 @app.route('/', methods=['GET'])
