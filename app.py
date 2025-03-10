@@ -1,25 +1,30 @@
 import os
+import uuid
+import openai
+import firebase_admin
+from firebase_admin import credentials, firestore
+from google.cloud import storage
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import openai
-from google.cloud import storage
-import uuid
 
 app = Flask(__name__)
 CORS(app)
 
-# Configurazione della chiave API di OpenAI
+# Configurazione API key OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Configura Google Cloud Storage
+# Configurazione Google Cloud Storage
 GCS_BUCKET_NAME = "crafty-tractor-450216-t8-news-images"
 storage_client = storage.Client()
 bucket = storage_client.bucket(GCS_BUCKET_NAME)
 
-# Simulazione di un database in memoria (ogni notizia ha un ID univoco)
-news_storage = []
+# Configurazione Firebase Firestore
+cred = credentials.Certificate("firebase_credentials.json")
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+news_collection = db.collection("news")
 
-# Funzione generica per chiamare le API di OpenAI (ChatGPT)
+# Funzione per chiamare OpenAI API
 def chatgpt_request(messages, model="gpt-3.5-turbo"):
     try:
         response = openai.ChatCompletion.create(
@@ -39,7 +44,7 @@ def upload_image_to_gcs(image):
     blob.make_public()
     return blob.public_url
 
-# Funzione per eliminare un'immagine da Google Cloud Storage
+# Funzione per eliminare immagini da Google Cloud Storage
 def delete_image_from_gcs(image_url):
     if not image_url:
         return
@@ -47,7 +52,7 @@ def delete_image_from_gcs(image_url):
     blob = bucket.blob(blob_name)
     blob.delete()
 
-# Endpoint per sintetizzare le notizie 
+# Endpoint per sintetizzare notizie
 @app.route('/synthesize', methods=['POST'])
 def synthesize():
     data = request.json
@@ -62,7 +67,7 @@ def synthesize():
     result = chatgpt_request(messages)
     return jsonify({"summary": result})
 
-# Endpoint per correggere le notizie
+# Endpoint per correggere notizie
 @app.route('/check_grammar', methods=['POST'])
 def check_grammar():
     data = request.get_json()
@@ -93,7 +98,7 @@ def generate_labels():
     labels = [label.strip() for label in result.split(",") if label.strip()]
     return jsonify({"labels": labels})
 
-# Endpoint per salvare le notizie
+# Endpoint per pubblicare una notizia
 @app.route('/publish_news', methods=['POST'])
 def publish_news():
     title = request.form.get("title", "").strip()
@@ -103,48 +108,47 @@ def publish_news():
     if not title or not content:
         return jsonify({"error": "Titolo e contenuto sono obbligatori."}), 400
 
-    # Gestione dell'immagine
+    # Gestione immagine
     image_url = None
     if "image" in request.files:
         image = request.files["image"]
         if image.filename:
             image_url = upload_image_to_gcs(image)
 
-    # Salvataggio della notizia con un ID univoco
+    # Creazione notizia nel database
+    news_id = str(uuid.uuid4())
     news_item = {
-        "id": str(uuid.uuid4()),  # Genera un ID univoco per ogni notizia
+        "id": news_id,
         "title": title,
         "content": content,
         "keywords": keywords.split(",") if keywords else [],
         "image_url": image_url
     }
-    news_storage.append(news_item)
+    news_collection.document(news_id).set(news_item)
 
     return jsonify({"message": "Notizia salvata con successo!", "news": news_item}), 201
 
-# Endpoint per ottenere le notizie salvate
+# Endpoint per ottenere tutte le notizie
 @app.route('/news', methods=['GET'])
 def get_news():
-    return jsonify({"news": news_storage})
+    news = [doc.to_dict() for doc in news_collection.stream()]
+    return jsonify({"news": news})
 
 # Endpoint per eliminare una notizia
 @app.route('/delete_news/<news_id>', methods=['DELETE'])
 def delete_news(news_id):
-    global news_storage
-    news_item = next((news for news in news_storage if news["id"] == news_id), None)
+    news_doc = news_collection.document(news_id).get()
 
-    if not news_item:
+    if not news_doc.exists:
         return jsonify({"error": "Notizia non trovata."}), 404
 
-    # Eliminare l'immagine dallo storage se esiste
+    news_item = news_doc.to_dict()
     delete_image_from_gcs(news_item["image_url"])
-
-    # Rimuovere la notizia dall'array
-    news_storage = [news for news in news_storage if news["id"] != news_id]
+    news_collection.document(news_id).delete()
 
     return jsonify({"message": "Notizia eliminata con successo!"}), 200
 
-# Endpoint di test
+# Endpoint per test
 @app.route('/', methods=['GET'])
 def health_check():
     return jsonify({"message": "Backend operativo!"})
